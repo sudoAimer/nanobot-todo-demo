@@ -1,8 +1,27 @@
-<script setup>
-import { onMounted, ref } from 'vue'; import { chat, events, getTodos } from './api'
-const session='demo-session', todos=ref([]), input=ref(''), reply=ref(''), busy=ref(false), error=ref('')
-const counts=()=>({pending:todos.value.filter(x=>x.status==='pending').length,in_progress:todos.value.filter(x=>x.status==='in_progress').length,completed:todos.value.filter(x=>x.status==='completed').length})
-async function send(){if(!input.value.trim()||busy.value)return; busy.value=true; error.value=''; const msg=input.value; input.value=''; try{const r=await chat(session,msg); reply.value=r.content; todos.value=r.todos}catch(e){error.value=String(e)}finally{busy.value=false}}
-onMounted(async()=>{todos.value=(await getTodos(session)).todos; const ws=events(session); ws.onmessage=e=>{const v=JSON.parse(e.data); if(v.type==='todo.updated')todos.value=v.data.todos}})
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+import { events, getTodos } from './api'
+import type { AgentEvent, Todo } from './types'
+const todos = ref<Todo[]>([])
+const input = ref('')
+const reply = ref('')
+const busy = ref(false)
+const error = ref('')
+let socket: WebSocket
+function onEvent(event: AgentEvent) {
+  if (event.type === 'run.started') busy.value = true
+  if (event.type === 'message.delta') reply.value += event.delta || ''
+  if (event.type === 'todo.updated' && event.data) todos.value = event.data.todos
+  if (event.type === 'run.completed' || event.type === 'run.cancelled') busy.value = false
+  if (event.type === 'run.failed') { busy.value = false; error.value = event.error || '运行失败' }
+}
+function send() { const message = input.value.trim(); if (!message || busy.value) return; reply.value = ''; input.value = ''; socket.send(JSON.stringify({ type: 'run.start', message })) }
+function stop() { socket.send(JSON.stringify({ type: 'run.cancel' })) }
+onMounted(async () => { todos.value = (await getTodos('demo-session')).todos; socket = events('demo-session', onEvent) })
+onUnmounted(() => socket?.close())
 </script>
-<template><main><section class="chat"><h1>nanobot Todo Demo</h1><div class="bubble">{{reply||'告诉 nanobot 一个需要拆解的任务。'}}</div><form @submit.prevent="send"><input v-model="input" placeholder="例如：实现一个登录模块"/><button :disabled="busy">{{busy?'运行中…':'发送'}}</button></form><p v-if="error" class="error">{{error}}</p></section><aside><h2>任务清单</h2><div class="counts">待办 {{counts().pending}} · 进行中 {{counts().in_progress}} · 完成 {{counts().completed}}</div><div v-for="todo in todos" :key="todo.content" class="todo" :class="todo.status"><span>{{todo.status==='completed'?'✓':todo.status==='in_progress'?'•':'○'}}</span>{{todo.content}}</div><p v-if="!todos.length" class="muted">暂无任务</p></aside></main></template>
+<template>
+  <main><section class="shell"><header><div><small>NANOBOT · AGENT WORKSPACE</small><h1>任务执行工作台</h1></div><span>{{ busy ? '● 执行中' : '● 已连接' }}</span></header>
+  <div class="body"><section class="chat"><div class="messages"><div class="message assistant"><b>nanobot</b><div>{{ reply || '告诉 nanobot 一个需要拆解或执行的任务。' }}</div></div></div><form @submit.prevent="send"><input v-model="input" placeholder="例如：实现一个登录模块" :disabled="busy"><button type="button" v-if="busy" @click="stop">停止</button><button v-else>发送</button></form><p v-if="error" class="error">{{ error }}</p></section>
+  <aside><h2>执行计划</h2><div class="counts">{{ todos.filter(t => t.status === 'completed').length }} 完成 · {{ todos.filter(t => t.status === 'in_progress').length }} 进行中 · {{ todos.filter(t => t.status === 'pending').length }} 待办</div><div v-for="todo in todos" :key="todo.content" :class="['todo', todo.status]"><span>{{ todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '•' : '○' }}</span>{{ todo.content }}</div></aside></div></section></main>
+</template>

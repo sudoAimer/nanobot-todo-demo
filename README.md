@@ -1,18 +1,28 @@
-# nanobot Todo Demo
+# Nanobot Agent Web Harness
 
-DeepSeek Harness 风格的 `todo_write` + FastAPI + Vue 3 demo。
+Vue 3 + FastAPI agent workspace. Agent turns run through the Nanobot Python SDK and stream over WebSocket; Todo updates are exposed as the `todo_write` tool and appear in real time.
 
-## 启动
+## Setup
 
 ```bash
 cd backend
+pip install -e ".[test]"
+nanobot onboard
 python -m uvicorn app.main:app --reload --port 8000
-cd ../frontend
+```
+
+In another terminal:
+
+```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-打开 http://localhost:5173。后端会在安装并配置 `nanobot-ai` 后通过 SDK 调用 agent；未配置时聊天接口返回可验证的 demo 回复。
+Optional environment variables: `NANOBOT_CONFIG_PATH`, `NANOBOT_WORKSPACE`, `TODO_STORAGE_PATH`, `TODO_ALLOW_PARALLEL_IN_PROGRESS`, `CORS_ORIGINS`, and `VITE_API_URL`.
 
-环境变量：`NANOBOT_CONFIG_PATH`、`TODO_STORAGE_PATH`、`TODO_ALLOW_PARALLEL_IN_PROGRESS`、`TODO_CLEAR_ON_TURN_START`、`CORS_ORIGINS`。
+## WebSocket protocol
 
+Connect to `ws://localhost:8000/api/sessions/{session_key}/ws`, then send JSON such as `{"type":"run.start","message":"实现登录模块"}` or `{"type":"run.cancel"}`. The server streams `run.started`, `message.delta`, `reasoning.delta`, `tool.*`, `todo.updated`, `run.completed`, `run.failed`, and `run.cancelled` events. HTTP is used only for health and Todo reads/writes.
+
+If Nanobot is not installed or configured, the server reports a clear `run.failed` event instead of returning a fake response.
