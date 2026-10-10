@@ -1,11 +1,14 @@
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from .models import ChatRequest, TodoWriteRequest
-from .todo_store import TodoStore
+from .models import TodoWriteRequest
+from nanobot_todo import TodoPlugin
 from .nanobot_runner import AgentService
 
-store = TodoStore(os.getenv("TODO_STORAGE_PATH", ".data/todos"))
+store = TodoPlugin(
+    storage_dir=os.getenv("TODO_STORAGE_PATH", ".data/todos"),
+    allow_parallel=os.getenv("TODO_ALLOW_PARALLEL_IN_PROGRESS", "true").lower() == "true",
+)
 app = FastAPI(title="nanobot Todo Demo")
 agent = AgentService(store)
 
@@ -41,3 +44,4 @@ async def events(websocket: WebSocket, session_key: str):
             elif kind == "ping": await websocket.send_json({"type":"pong"})
     except WebSocketDisconnect: pass
     finally: agent.disconnect(session_key, websocket)
+

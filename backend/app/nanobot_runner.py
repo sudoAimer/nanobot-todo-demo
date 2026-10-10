@@ -3,17 +3,18 @@ import os
 import uuid
 from collections import defaultdict
 from typing import Any
-from .todo_store import TodoStore
-from .todo_tool import SessionTodoTool
+from dataclasses import asdict, is_dataclass
+from nanobot_todo import TodoPlugin
 
 
 class AgentService:
-    def __init__(self, store: TodoStore) -> None:
+    def __init__(self, store: TodoPlugin) -> None:
         self.store, self.bot = store, None
         self.connections: dict[str, set[Any]] = defaultdict(set)
         self.runs: dict[str, asyncio.Task[None]] = {}
         self.run_ids: dict[str, str] = {}
         self.lock = asyncio.Lock()
+        self.store.on_update = self._on_todo_update
 
     async def startup(self) -> None:
         try:
@@ -22,8 +23,12 @@ class AgentService:
             if value := os.getenv("NANOBOT_CONFIG_PATH"): kwargs["config_path"] = value
             if value := os.getenv("NANOBOT_WORKSPACE"): kwargs["workspace"] = value
             self.bot = Nanobot.from_config(**kwargs)
+            self.store.install(self.bot)
         except ImportError:
             self.bot = None
+
+    async def _on_todo_update(self, session: str, state: dict) -> None:
+        await self.emit(session, {"type": "todo.updated", "data": state})
 
     async def shutdown(self) -> None:
         for task in self.runs.values(): task.cancel()
@@ -60,25 +65,16 @@ class AgentService:
         if self.bot is None:
             await self.emit(session, {"type": "run.failed", "run_id": run_id, "error": "nanobot-ai 未安装或未配置，请先安装并运行 nanobot onboard。"}); return
         try:
-            registry = getattr(getattr(self.bot, "_loop", None), "tools", None)
-            if registry is not None and hasattr(registry, "register"):
-                if "todo_write" not in getattr(registry, "_tools", {}):
-                    registry.register(SessionTodoTool(self.store, "", os.getenv("TODO_ALLOW_PARALLEL_IN_PROGRESS", "true").lower() == "true"))
-            token = SessionTodoTool.bind(session)
             async for event in self.bot.stream(message, session_key=session, channel="web", chat_id=session):
                 kind = str(event.type); kind = "message.delta" if kind == "text.delta" else kind
                 payload = {"type": kind, "run_id": run_id}
-                for key in ("delta", "name", "content", "error", "input", "output", "usage", "metadata"):
-                    if getattr(event, key, None) is not None: payload[key] = getattr(event, key)
+                for key in ("delta", "name", "content", "error", "arguments", "tool_call_id", "usage", "metadata"):
+                    if getattr(event, key, None) is not None: payload[key] = asdict(getattr(event, key)) if is_dataclass(getattr(event, key)) else getattr(event, key)
                 await self.emit(session, payload)
-                if kind == "tool.completed" and payload.get("name") == "todo_write":
-                    state = await self.store.get(session)
-                    await self.emit(session, {"type": "todo.updated", "run_id": run_id, "data": state.model_dump(mode="json")})
-            from .todo_tool import _active_session
-            _active_session.reset(token)
         except asyncio.CancelledError:
             await self.emit(session, {"type": "run.cancelled", "run_id": run_id})
         except Exception as exc:
             await self.emit(session, {"type": "run.failed", "run_id": run_id, "error": str(exc)})
         finally:
             if self.run_ids.get(session) == run_id: self.runs.pop(session, None); self.run_ids.pop(session, None)
+
